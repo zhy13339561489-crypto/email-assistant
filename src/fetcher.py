@@ -185,15 +185,18 @@ class EmailFetcher:
 
         body = self._extract_body(msg)
         attachments = self._extract_attachment_names(msg)
+        raw_headers = self._extract_raw_headers(msg)
 
         return EmailData(
             uid=uid.decode(),
             subject=subject,
             sender=sender_addr or sender,
             sender_name=sender_name or sender_addr,
-            to=to,
+            to=self._decode_header(to),
             date=date,
             body_text=body,
+            raw_body_text=body,
+            raw_headers=raw_headers,
             has_attachments=bool(attachments),
             attachment_names=attachments,
         )
@@ -246,6 +249,12 @@ class EmailFetcher:
                 if filename:
                     names.append(self._decode_header(filename))
         return names
+
+    def _extract_raw_headers(self, msg: email.message.Message) -> str:
+        lines = []
+        for key, value in msg.items():
+            lines.append(f"{key}: {self._decode_header(value)}")
+        return "\n".join(lines)
 
 
 def _to_naive_datetime(value: datetime) -> datetime:

@@ -13,6 +13,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from loguru import logger
 
+from .mailer import SMTPReplyMailer
 from .processor import EmailProcessingService
 from .storage import MySQLEmailStorage
 
@@ -26,7 +27,9 @@ class BackendRuntime:
         self.config = config
         self.storage = MySQLEmailStorage.from_config(config)
         self.processor = EmailProcessingService(config, storage=self.storage)
+        self.mailer = SMTPReplyMailer()
         self.process_lock = threading.Lock()
+        self.reply_lock = threading.Lock()
         self.last_process: dict = {
             "running": False,
             "processed": 0,
@@ -43,9 +46,21 @@ class BackendRuntime:
             "finished_at": "",
             "error": "",
         }
+        self.last_backfill: dict = {
+            "running": False,
+            "updated": 0,
+            "started_at": "",
+            "finished_at": "",
+            "error": "",
+        }
 
-    def dashboard(self, days: int, category: str, query: str) -> dict:
-        return self.storage.get_dashboard(days=days, category=category, query=query)
+    def dashboard(self, days: int, category: str, query: str, mailbox: str = "inbox") -> dict:
+        return self.storage.get_dashboard(
+            days=days,
+            category=category,
+            query=query,
+            mailbox=mailbox,
+        )
 
     def process_now(self) -> dict:
         if not self.process_lock.acquire(blocking=False):
@@ -127,12 +142,133 @@ class BackendRuntime:
     def latest_daily_report(self) -> dict:
         return {"report": self.storage.get_latest_daily_report()}
 
+    def backfill_originals(self, days: int = 30) -> dict:
+        if not self.process_lock.acquire(blocking=False):
+            return {"running": True, "message": "已有邮件任务正在运行", **self.last_backfill}
+
+        self.last_backfill = {
+            "running": True,
+            "updated": 0,
+            "started_at": datetime.now().isoformat(timespec="seconds"),
+            "finished_at": "",
+            "error": "",
+        }
+        try:
+            updated = self.processor.backfill_originals(days=days)
+            self.last_backfill.update(
+                {
+                    "running": False,
+                    "updated": updated,
+                    "finished_at": datetime.now().isoformat(timespec="seconds"),
+                    "error": "",
+                }
+            )
+            return {"running": False, "message": "原始邮件信息补采完成", **self.last_backfill}
+        except Exception as e:
+            logger.exception(f"原始邮件信息补采任务失败: {e}")
+            self.last_backfill.update(
+                {
+                    "running": False,
+                    "updated": 0,
+                    "finished_at": datetime.now().isoformat(timespec="seconds"),
+                    "error": str(e),
+                }
+            )
+            return {"running": False, "message": "原始邮件信息补采失败", **self.last_backfill}
+        finally:
+            self.process_lock.release()
+
+    def save_reply_draft(self, reply_id: int, payload: dict) -> dict:
+        updated = self.storage.update_reply_draft(
+            reply_id=reply_id,
+            subject=str(payload.get("subject") or ""),
+            body=str(payload.get("body") or ""),
+            reviewer_notes=str(payload.get("reviewer_notes") or ""),
+            status="pending_review",
+        )
+        return {"ok": updated, "message": "草稿已保存" if updated else "草稿不存在或已发送"}
+
+    def revise_reply(self, reply_id: int, payload: dict) -> dict:
+        reply = self.storage.get_reply_with_email(reply_id)
+        if not reply:
+            return {"ok": False, "error": "回复草稿不存在"}
+
+        notes = str(payload.get("reviewer_notes") or "").strip()
+        if not notes:
+            return {"ok": False, "error": "请填写修改意见"}
+
+        current_subject = str(payload.get("subject") or reply.get("reply_subject") or "")
+        current_body = str(payload.get("body") or reply.get("reply_body") or "")
+        draft = self.processor.ai.revise_reply(reply, current_subject, current_body, notes)
+        self.storage.update_reply_draft(
+            reply_id=reply_id,
+            subject=draft.subject,
+            body=draft.body,
+            reviewer_notes=notes,
+            status="pending_review",
+        )
+        return {"ok": True, "message": "AI 已根据意见改写", "subject": draft.subject, "body": draft.body}
+
+    def send_reply(self, reply_id: int, payload: dict) -> dict:
+        if not self.reply_lock.acquire(blocking=False):
+            return {"ok": False, "error": "已有回复发送任务正在运行"}
+        try:
+            if "subject" in payload or "body" in payload:
+                self.storage.update_reply_draft(
+                    reply_id=reply_id,
+                    subject=str(payload.get("subject") or ""),
+                    body=str(payload.get("body") or ""),
+                    reviewer_notes=str(payload.get("reviewer_notes") or ""),
+                    status="pending_review",
+                )
+
+            reply = self.storage.get_reply_with_email(reply_id)
+            if not reply:
+                return {"ok": False, "error": "回复草稿不存在"}
+            if not reply.get("reply_needs_reply"):
+                return {"ok": False, "error": "该邮件被判定为无需回复"}
+            if reply.get("reply_status") == "sent":
+                return {"ok": False, "error": "该回复已经发送"}
+            if not reply.get("reply_subject") or not reply.get("reply_body"):
+                return {"ok": False, "error": "回复主题或正文为空"}
+
+            account_cfg = self._account_config(reply.get("account") or "")
+            if not account_cfg:
+                return {"ok": False, "error": "找不到对应邮箱账号配置"}
+
+            self.storage.mark_reply_sending(reply_id)
+            try:
+                self.mailer.send_reply(account_cfg, reply)
+            except Exception as e:
+                self.storage.mark_reply_send_failed(reply_id, str(e))
+                return {"ok": False, "error": f"发送失败: {e}"}
+
+            self.storage.mark_reply_sent(reply_id)
+            return {"ok": True, "message": "回复邮件已发送"}
+        finally:
+            self.reply_lock.release()
+
+    def _account_config(self, account_name: str) -> dict | None:
+        for account in self.config.get("email_accounts", []):
+            if account.get("name") == account_name:
+                return account
+        return None
+
+    def delete_email(self, email_id: int) -> dict:
+        deleted = self.storage.soft_delete_email(email_id)
+        return {"ok": deleted, "message": "邮件已删除" if deleted else "邮件不存在或已删除"}
+
+    def delete_action_item(self, action_id: int) -> dict:
+        deleted = self.storage.soft_delete_action_item(action_id)
+        return {"ok": deleted, "message": "待办事项已删除" if deleted else "待办事项不存在或已删除"}
+
     def health(self) -> dict:
         return {
             "ok": True,
             "database": "mysql",
             "last_process": self.last_process,
             "last_report": self.last_report,
+            "last_backfill": self.last_backfill,
         }
 
 
@@ -152,6 +288,18 @@ def make_handler(runtime: BackendRuntime, static_dir: Path = FRONTEND_DIR):
                         days=_parse_int(params.get("days", ["30"])[0], 30),
                         category=params.get("category", ["all"])[0],
                         query=params.get("q", [""])[0],
+                        mailbox=params.get("mailbox", ["inbox"])[0],
+                    )
+                )
+                return
+            if parsed.path == "/api/spam":
+                params = parse_qs(parsed.query)
+                self._send_json(
+                    runtime.dashboard(
+                        days=_parse_int(params.get("days", ["30"])[0], 30),
+                        category="all",
+                        query=params.get("q", [""])[0],
+                        mailbox="spam",
                     )
                 )
                 return
@@ -168,6 +316,36 @@ def make_handler(runtime: BackendRuntime, static_dir: Path = FRONTEND_DIR):
             if parsed.path == "/api/reports/daily":
                 self._send_json(runtime.generate_daily_report())
                 return
+            if parsed.path == "/api/backfill-originals":
+                params = parse_qs(parsed.query)
+                self._send_json(
+                    runtime.backfill_originals(
+                        days=_parse_int(params.get("days", ["30"])[0], 30),
+                    )
+                )
+                return
+            delete_action = _parse_delete_action(parsed.path)
+            if delete_action:
+                item_id, item_type = delete_action
+                if item_type == "email":
+                    self._send_json(runtime.delete_email(item_id))
+                    return
+                if item_type == "action":
+                    self._send_json(runtime.delete_action_item(item_id))
+                    return
+            reply_action = _parse_reply_action(parsed.path)
+            if reply_action:
+                reply_id, action = reply_action
+                payload = self._read_json()
+                if action == "save":
+                    self._send_json(runtime.save_reply_draft(reply_id, payload))
+                    return
+                if action == "revise":
+                    self._send_json(runtime.revise_reply(reply_id, payload))
+                    return
+                if action == "send":
+                    self._send_json(runtime.send_reply(reply_id, payload))
+                    return
             self.send_error(404)
 
         def log_message(self, fmt: str, *args) -> None:
@@ -181,6 +359,15 @@ def make_handler(runtime: BackendRuntime, static_dir: Path = FRONTEND_DIR):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _read_json(self) -> dict:
+            length = _parse_int(self.headers.get("Content-Length", "0"), 0)
+            if length <= 0:
+                return {}
+            try:
+                return json.loads(self.rfile.read(length).decode("utf-8"))
+            except json.JSONDecodeError:
+                return {}
 
         def _send_static(self, request_path: str) -> None:
             target = "index.html" if request_path in ("", "/") else request_path.lstrip("/")
@@ -256,6 +443,36 @@ def _parse_int(value: str, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _parse_reply_action(path: str) -> tuple[int, str] | None:
+    parts = path.strip("/").split("/")
+    if len(parts) != 4 or parts[0] != "api" or parts[1] != "replies":
+        return None
+    try:
+        reply_id = int(parts[2])
+    except ValueError:
+        return None
+    if parts[3] not in {"save", "revise", "send"}:
+        return None
+    return reply_id, parts[3]
+
+
+def _parse_delete_action(path: str) -> tuple[int, str] | None:
+    parts = path.strip("/").split("/")
+    if len(parts) != 4 or parts[0] != "api" or parts[3] != "delete":
+        return None
+    if parts[1] == "emails":
+        item_type = "email"
+    elif parts[1] == "actions":
+        item_type = "action"
+    else:
+        return None
+    try:
+        item_id = int(parts[2])
+    except ValueError:
+        return None
+    return item_id, item_type
 
 
 def _parse_report_time(value: str) -> tuple[int, int]:

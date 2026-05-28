@@ -19,6 +19,17 @@ def load_config(config_path: str = "config.yaml") -> dict:
         account["imap_port"] = int(os.getenv(f"EMAIL_{name}_IMAP_PORT", "993"))
         account["use_ssl"] = os.getenv(f"EMAIL_{name}_USE_SSL", "true").lower() == "true"
         account["password"] = os.getenv(f"EMAIL_{name}_PASSWORD", "")
+        account["smtp_server"] = os.getenv(
+            f"EMAIL_{name}_SMTP_SERVER",
+            _infer_smtp_server(account["imap_server"]),
+        )
+        account["smtp_use_ssl"] = os.getenv(f"EMAIL_{name}_SMTP_USE_SSL", "true").lower() == "true"
+        account["smtp_use_tls"] = os.getenv(f"EMAIL_{name}_SMTP_USE_TLS", "false").lower() == "true"
+        default_smtp_port = "465" if account["smtp_use_ssl"] else "587"
+        account["smtp_port"] = int(os.getenv(f"EMAIL_{name}_SMTP_PORT", default_smtp_port))
+        account["smtp_username"] = os.getenv(f"EMAIL_{name}_SMTP_USERNAME", account["address"])
+        account["smtp_password"] = os.getenv(f"EMAIL_{name}_SMTP_PASSWORD", account["password"])
+        account["from_name"] = os.getenv(f"EMAIL_{name}_FROM_NAME", "")
 
     # 从环境变量补充 OpenAI 兼容 API 配置
     config["openai"]["api_key"] = os.getenv("OPENAI_API_KEY", "")
@@ -49,3 +60,11 @@ def _env(*names: str, default: str = "") -> str:
         if value:
             return value
     return default
+
+
+def _infer_smtp_server(imap_server: str) -> str:
+    if not imap_server:
+        return ""
+    if imap_server.startswith("imap."):
+        return "smtp." + imap_server.removeprefix("imap.")
+    return imap_server.replace("imap", "smtp", 1)

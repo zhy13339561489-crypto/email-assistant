@@ -14,6 +14,10 @@
         <h1>邮件处理结果</h1>
       </div>
       <div class="toolbar" aria-label="筛选工具">
+        <div class="mailbox-switch" aria-label="邮箱箱体">
+          <button id="inboxBtn" class="mailbox-tab active" type="button">普通邮件箱</button>
+          <button id="spamBtn" class="mailbox-tab" type="button">垃圾邮件箱</button>
+        </div>
         <label class="field">
           <span>范围</span>
           <select id="daysSelect">
@@ -96,6 +100,8 @@
                 <th>发件人</th>
                 <th>置信度</th>
                 <th>待办</th>
+                <th>回复</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody id="emailTable"></tbody>
@@ -126,7 +132,25 @@
         <dt>账号</dt>
         <dd id="detailAccount">-</dd>
       </div>
+      <div>
+        <dt>收件人</dt>
+        <dd id="detailRecipient">-</dd>
+      </div>
+      <div>
+        <dt>附件</dt>
+        <dd id="detailAttachments">-</dd>
+      </div>
     </dl>
+    <section>
+      <h3>原始邮件正文</h3>
+      <pre id="detailRawBody" class="detail-raw">-</pre>
+    </section>
+    <section>
+      <details class="raw-details">
+        <summary>原始头信息</summary>
+        <pre id="detailRawHeaders" class="detail-raw">-</pre>
+      </details>
+    </section>
     <section>
       <h3>摘要</h3>
       <p id="detailSummary" class="detail-text">-</p>
@@ -138,6 +162,31 @@
     <section>
       <h3>待办预览</h3>
       <p id="detailActions" class="detail-text">-</p>
+    </section>
+    <section id="replySection" class="reply-panel">
+      <div class="reply-heading">
+        <h3>回复审核</h3>
+        <span id="replyStatus" class="reply-status">未判断</span>
+      </div>
+      <p id="replyReason" class="detail-text">-</p>
+      <label class="reply-field">
+        <span>回复主题</span>
+        <input id="replySubject" type="text">
+      </label>
+      <label class="reply-field">
+        <span>回复正文</span>
+        <textarea id="replyBody" rows="9"></textarea>
+      </label>
+      <label class="reply-field">
+        <span>修改意见</span>
+        <textarea id="replyNotes" rows="4" placeholder="写下希望 AI 如何修改当前草稿"></textarea>
+      </label>
+      <div class="reply-actions">
+        <button id="saveReplyBtn" class="secondary" type="button">保存草稿</button>
+        <button id="reviseReplyBtn" class="secondary" type="button">AI 修改</button>
+        <button id="sendReplyBtn" class="primary" type="button">审核通过并发送</button>
+      </div>
+      <p id="replyMessage" class="muted"></p>
     </section>
   </aside>
 

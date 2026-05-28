@@ -41,6 +41,43 @@ class TestAIEngine(unittest.TestCase):
         self.assertEqual(result, '{"ok": true}')
         self.assertEqual(fake_llm.messages[0]["content"], "hello")
 
+    def test_reply_decision_and_draft_use_json(self):
+        class FakeLLM:
+            def __init__(self):
+                self.responses = [
+                    '{"needs_reply": true, "reason": "对方提出问题"}',
+                    '{"subject": "Re: Hello", "body": "您好，已收到。"}',
+                ]
+
+            def invoke(self, messages):
+                return SimpleNamespace(content=self.responses.pop(0))
+
+        from datetime import datetime
+        from src.models import ClassificationResult, EmailData, ProcessResult
+
+        email = EmailData(
+            uid="1",
+            subject="Hello",
+            sender="sender@example.com",
+            sender_name="Sender",
+            to="me@example.com",
+            date=datetime(2026, 5, 28, 18, 0),
+            body_text="请确认是否收到。",
+        )
+        process_result = ProcessResult(
+            classification=ClassificationResult("工作", 0.9, "reason"),
+            summary="请求确认",
+        )
+        self.engine._llm = FakeLLM()
+        self.engine._to_langchain_messages = lambda messages: messages
+
+        decision = self.engine.decide_reply(email, process_result)
+        draft = self.engine.draft_reply(email, process_result)
+
+        self.assertTrue(decision.needs_reply)
+        self.assertEqual(draft.subject, "Re: Hello")
+        self.assertIn("已收到", draft.body)
+
 
 if __name__ == "__main__":
     unittest.main()

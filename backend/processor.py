@@ -8,7 +8,7 @@ from ai_engine import AIEngine
 from src.fetcher import EmailFetcher
 from src.preprocessor import EmailPreprocessor
 
-from .storage import MySQLEmailStorage
+from .storage import MySQLEmailStorage, _mailbox_for_category
 
 
 class EmailProcessingService:
@@ -49,6 +49,14 @@ class EmailProcessingService:
         for account_cfg in self.config["email_accounts"]:
             total_processed += self._process_account_window(account_cfg, start, end)
         return total_processed
+
+    def backfill_originals(self, days: int = 30) -> int:
+        end = datetime.now().replace(microsecond=0) + timedelta(seconds=1)
+        start = end - timedelta(days=max(1, days))
+        total_updated = 0
+        for account_cfg in self.config["email_accounts"]:
+            total_updated += self._backfill_account_originals(account_cfg, start, end)
+        return total_updated
 
     def generate_daily_report(self, end_at: datetime | None = None) -> dict:
         window_end = end_at or datetime.now().replace(second=0, microsecond=0)
@@ -107,13 +115,42 @@ class EmailProcessingService:
 
             results = self.ai.process_batch(emails)
             for email_data, result in results:
-                self.storage.save_result(email_data, result, account=account_cfg["name"])
+                email_id = self.storage.save_result(email_data, result, account=account_cfg["name"])
+                self._prepare_reply_review(email_id, email_data, result)
                 logger.info(f"  [{result.classification.category}] {email_data.subject[:50]}")
 
             logger.info(f"账户 {account_cfg['name']} 处理完成，共 {len(results)} 封")
             return len(results)
         except Exception as e:
             logger.error(f"处理账户 {account_cfg['name']} 失败: {e}")
+            return 0
+        finally:
+            fetcher.disconnect()
+
+    def _backfill_account_originals(self, account_cfg: dict, start: datetime, end: datetime) -> int:
+        if not account_cfg.get("password"):
+            logger.warning(f"Account {account_cfg['name']} has no password, skip original backfill")
+            return 0
+
+        fetcher = EmailFetcher(
+            address=account_cfg["address"],
+            imap_server=account_cfg["imap_server"],
+            imap_port=account_cfg["imap_port"],
+            password=account_cfg["password"],
+            use_ssl=account_cfg.get("use_ssl", True),
+        )
+
+        try:
+            fetcher.connect()
+            updated = 0
+            for email_data in fetcher.fetch_between(start, end):
+                if not self.storage.original_fields_missing(email_data.uid, account=account_cfg["name"]):
+                    continue
+                updated += self.storage.update_original_fields(email_data, account=account_cfg["name"])
+            logger.info(f"Account {account_cfg['name']} original backfill updated {updated} emails")
+            return updated
+        except Exception as e:
+            logger.error(f"Account {account_cfg['name']} original backfill failed: {e}")
             return 0
         finally:
             fetcher.disconnect()
@@ -149,7 +186,8 @@ class EmailProcessingService:
 
             results = self.ai.process_batch(new_emails)
             for email_data, result in results:
-                self.storage.save_result(email_data, result, account=account_cfg["name"])
+                email_id = self.storage.save_result(email_data, result, account=account_cfg["name"])
+                self._prepare_reply_review(email_id, email_data, result)
                 logger.info(f"  [{result.classification.category}] {email_data.subject[:50]}")
             return len(results)
         except Exception as e:
@@ -157,3 +195,42 @@ class EmailProcessingService:
             return 0
         finally:
             fetcher.disconnect()
+
+    def _prepare_reply_review(self, email_id: int, email_data, result) -> None:
+        try:
+            if _mailbox_for_category(result.classification.category) == "spam":
+                self.storage.save_reply_decision(
+                    email_id,
+                    needs_reply=False,
+                    reason="垃圾邮件不需要自动回复",
+                    status="not_required",
+                )
+                return
+
+            decision = self.ai.decide_reply(email_data, result)
+            if not decision.needs_reply:
+                self.storage.save_reply_decision(
+                    email_id,
+                    needs_reply=False,
+                    reason=decision.reason,
+                    status="not_required",
+                )
+                return
+
+            draft = self.ai.draft_reply(email_data, result)
+            self.storage.save_reply_decision(
+                email_id,
+                needs_reply=True,
+                reason=decision.reason,
+                draft_subject=draft.subject,
+                draft_body=draft.body,
+                status="pending_review",
+            )
+        except Exception as e:
+            logger.error(f"Reply routing failed for email_id={email_id}: {e}")
+            self.storage.save_reply_decision(
+                email_id,
+                needs_reply=False,
+                reason=f"自动回复路由失败: {e}",
+                status="route_failed",
+            )

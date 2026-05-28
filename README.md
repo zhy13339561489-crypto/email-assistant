@@ -23,6 +23,12 @@ EMAIL_USER_IMAP_SERVER=imap.example.com
 EMAIL_USER_IMAP_PORT=993
 EMAIL_USER_USE_SSL=true
 EMAIL_USER_PASSWORD=your_app_password
+EMAIL_USER_SMTP_SERVER=smtp.example.com
+EMAIL_USER_SMTP_PORT=465
+EMAIL_USER_SMTP_USE_SSL=true
+EMAIL_USER_SMTP_USE_TLS=false
+EMAIL_USER_SMTP_USERNAME=your_email@example.com
+EMAIL_USER_SMTP_PASSWORD=your_app_password
 
 # MySQL 配置（也兼容 MYSQL_IP / MYSQL_USERNAME）
 MYSQL_HOST=127.0.0.1
@@ -38,7 +44,7 @@ OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 OPENAI_MODEL=qwen3-vl-235b-a22b-thinking
 ```
 
-MySQL 数据库需要先存在，后端启动后会自动创建 `emails` 和 `action_items` 两张表。
+MySQL 数据库需要先存在，后端启动后会自动创建 `emails`、`action_items`、`email_replies` 和日报相关表。
 
 ## 启动后端
 
@@ -55,6 +61,8 @@ python main.py backend --host 127.0.0.1 --port 8765
 - 前端“立即处理”按钮会请求 `POST /api/process`
 - 前端列表数据来自 `GET /api/dashboard`
 - 前端“生成日报”按钮会请求 `POST /api/reports/daily`
+- 前端有“收件箱 / 垃圾邮件箱”切换，分类为 `垃圾邮件` 的邮件会进入单独的垃圾邮件箱
+- AI 会在每封邮件处理后判断是否需要回复；需要回复时生成草稿，由前端人工审核、修改或让 AI 按意见改写，审核通过后才通过 SMTP 发送
 
 常用参数：
 
@@ -72,9 +80,16 @@ python main.py backend --no-auto
 
 - `GET /api/health`：后端健康状态和最近一次处理状态
 - `GET /api/dashboard?days=30&category=all&q=`：邮件处理结果、统计、分类、待办
+- `GET /api/dashboard?mailbox=spam`：垃圾邮件箱
+- `GET /api/spam?days=30&q=`：垃圾邮件箱快捷接口
 - `POST /api/process`：立即检查未读邮件并处理
 - `POST /api/reports/daily`：立即生成一份 AI 日报
 - `GET /api/reports/latest`：读取最新 AI 日报
+- `POST /api/replies/{id}/save`：保存人工修改后的回复草稿
+- `POST /api/replies/{id}/revise`：根据人工修改意见让 AI 重写回复草稿
+- `POST /api/replies/{id}/send`：人工审核通过后发送回复邮件
+- `POST /api/emails/{id}/delete`：逻辑删除邮件
+- `POST /api/actions/{id}/delete`：逻辑删除待办事项
 
 ## 项目结构
 

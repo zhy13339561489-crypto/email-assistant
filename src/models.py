@@ -11,6 +11,8 @@ class EmailData:
     to: str
     date: datetime
     body_text: str
+    raw_body_text: str = ""
+    raw_headers: str = ""
     has_attachments: bool = False
     attachment_names: list[str] = field(default_factory=list)
 
@@ -34,3 +36,15 @@ class ProcessResult:
     classification: ClassificationResult
     summary: str
     action_items: list[ActionItem] = field(default_factory=list)
+
+
+@dataclass
+class ReplyDecision:
+    needs_reply: bool
+    reason: str = ""
+
+
+@dataclass
+class ReplyDraft:
+    subject: str
+    body: str

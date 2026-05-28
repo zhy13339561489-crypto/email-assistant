@@ -94,6 +94,29 @@ h3 {
   justify-content: flex-end;
 }
 
+.mailbox-switch {
+  display: inline-flex;
+  height: 40px;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.mailbox-tab {
+  height: 100%;
+  padding: 0 13px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.mailbox-tab.active {
+  background: var(--text);
+  color: #fff;
+}
+
 .field,
 .search {
   display: grid;
@@ -331,10 +354,11 @@ h3 {
 }
 
 .action-item {
+  position: relative;
   border: 1px solid var(--line);
   border-left: 4px solid var(--amber);
   border-radius: 8px;
-  padding: 11px 12px;
+  padding: 11px 56px 11px 12px;
   background: var(--panel-soft);
 }
 
@@ -357,6 +381,28 @@ h3 {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
+}
+
+.delete-button {
+  min-height: 30px;
+  border: 1px solid rgba(192, 86, 74, 0.28);
+  border-radius: 8px;
+  padding: 5px 9px;
+  background: #fdecea;
+  color: var(--coral);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.delete-button:hover {
+  background: #fbd9d5;
+}
+
+.action-item .delete-button {
+  position: absolute;
+  top: 10px;
+  right: 10px;
 }
 
 .report-box {
@@ -390,7 +436,7 @@ h3 {
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 880px;
+  min-width: 980px;
 }
 
 th,
@@ -453,6 +499,40 @@ tbody tr:hover {
 .confidence {
   color: var(--accent-dark);
   font-weight: 800;
+}
+
+.reply-badge,
+.reply-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 3px 9px;
+  background: #eef3f1;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.reply-badge.pending_review,
+.reply-status.pending_review {
+  background: #fff7df;
+  color: var(--amber);
+}
+
+.reply-badge.sent,
+.reply-status.sent {
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+}
+
+.reply-badge.send_failed,
+.reply-badge.route_failed,
+.reply-status.send_failed,
+.reply-status.route_failed {
+  background: #fdecea;
+  color: var(--coral);
 }
 
 .empty {
@@ -524,6 +604,93 @@ tbody tr:hover {
   white-space: pre-wrap;
 }
 
+.detail-raw {
+  max-height: 260px;
+  margin: 0 0 18px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfc;
+  color: #33413e;
+  font-family: "Consolas", "SFMono-Regular", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.raw-details {
+  margin-bottom: 18px;
+}
+
+.raw-details summary {
+  margin-bottom: 10px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.reply-panel {
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+
+.reply-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.reply-heading h3 {
+  margin-bottom: 0;
+}
+
+.reply-field {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.reply-field input,
+.reply-field textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 11px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.5;
+  outline: none;
+  resize: vertical;
+}
+
+.reply-field input:focus,
+.reply-field textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.14);
+}
+
+.reply-field input:disabled,
+.reply-field textarea:disabled {
+  background: var(--panel-soft);
+  color: var(--muted);
+}
+
+.reply-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
 @media (max-width: 980px) {
   .topbar,
   .layout {
@@ -572,9 +739,14 @@ tbody tr:hover {
 
   .field select,
   .search input,
+  .mailbox-switch,
   .secondary,
   .primary {
     width: 100%;
+  }
+
+  .mailbox-tab {
+    flex: 1;
   }
 
   .metric {

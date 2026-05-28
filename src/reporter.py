@@ -1,13 +1,12 @@
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
-from .storage import EmailStorage
-
 
 class Reporter:
-    def __init__(self, storage: EmailStorage):
+    def __init__(self, storage: Any):
         self.storage = storage
         self.template_dir = Path(__file__).parent.parent / "templates"
 

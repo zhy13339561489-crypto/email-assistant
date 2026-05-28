@@ -4,7 +4,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from src.models import ActionItem, ClassificationResult, EmailData, ProcessResult
+from src.models import ActionItem, ClassificationResult, EmailData, ProcessResult, ReplyDecision, ReplyDraft
 from src.preprocessor import EmailPreprocessor
 
 try:
@@ -186,6 +186,85 @@ class AIEngine:
                 logger.error(f"处理邮件失败 [{email_data.subject}]: {e}")
         return results
 
+    def decide_reply(self, email_data: EmailData, result: ProcessResult) -> ReplyDecision:
+        context = self.preprocessor.build_context(email_data)
+        prompt = (
+            "你是邮件处理系统的回复路由器。判断这封邮件是否需要人工审核后的正式回复。\n"
+            "需要回复的例子：客户咨询、招聘沟通、需要确认的信息、对方提出问题或请求。\n"
+            "不需要回复的例子：垃圾邮件、促销广告、纯通知、系统自动邮件、无需行动的订阅消息。\n"
+            "只返回 JSON：{\"needs_reply\": true/false, \"reason\": \"简短原因\"}。"
+        )
+        user_prompt = (
+            f"{context}\n\n"
+            f"分类：{result.classification.category}\n"
+            f"摘要：{result.summary}\n"
+            f"待办数：{len(result.action_items)}"
+        )
+        data = self._parse_json(self._call_api([
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": user_prompt},
+        ]))
+        if not isinstance(data, dict):
+            data = {}
+        return ReplyDecision(
+            needs_reply=_to_bool(data.get("needs_reply")),
+            reason=str(data.get("reason") or ""),
+        )
+
+    def draft_reply(self, email_data: EmailData, result: ProcessResult) -> ReplyDraft:
+        context = self.preprocessor.build_context(email_data)
+        prompt = (
+            "你是专业邮件助理。请基于原始邮件写一封可发送的中文回复草稿。\n"
+            "要求：礼貌、简洁、具体；不要编造原邮件没有的信息；不要包含占位符；"
+            "如果需要人工补充信息，用自然语言说明需要补充的内容。\n"
+            "只返回 JSON：{\"subject\": \"回复主题\", \"body\": \"邮件正文\"}。"
+        )
+        user_prompt = (
+            f"{context}\n\n"
+            f"分类：{result.classification.category}\n"
+            f"摘要：{result.summary}\n"
+            f"待办：{'; '.join(item.action for item in result.action_items) or '无'}"
+        )
+        data = self._parse_json(self._call_api([
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": user_prompt},
+        ]))
+        if not isinstance(data, dict):
+            data = {}
+        return ReplyDraft(
+            subject=str(data.get("subject") or _reply_subject(email_data.subject)),
+            body=str(data.get("body") or ""),
+        )
+
+    def revise_reply(
+        self,
+        email_record: dict,
+        current_subject: str,
+        current_body: str,
+        reviewer_notes: str,
+    ) -> ReplyDraft:
+        prompt = (
+            "你是邮件回复润色助理。请根据人工修改意见，结合原始邮件和当前回复草稿，"
+            "重写一版可发送的回复。不要编造原邮件没有的信息。"
+            "只返回 JSON：{\"subject\": \"回复主题\", \"body\": \"邮件正文\"}。"
+        )
+        user_prompt = (
+            f"原始邮件：\n{_record_context(email_record)}\n\n"
+            f"当前回复主题：{current_subject}\n\n"
+            f"当前回复正文：\n{current_body}\n\n"
+            f"人工修改意见：\n{reviewer_notes}"
+        )
+        data = self._parse_json(self._call_api([
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": user_prompt},
+        ]))
+        if not isinstance(data, dict):
+            data = {}
+        return ReplyDraft(
+            subject=str(data.get("subject") or current_subject or _reply_subject(email_record.get("subject", ""))),
+            body=str(data.get("body") or current_body or ""),
+        )
+
     def generate_daily_report(self, emails: list[dict], start_at: str, end_at: str) -> str:
         if not emails:
             return f"邮件日报（{start_at} ~ {end_at}）\n\n该时间段内没有已处理邮件。"
@@ -235,3 +314,30 @@ class AIEngine:
                         continue
             logger.warning(f"无法解析 JSON: {text[:200]}")
             return {} if "{" in text else []
+
+
+def _to_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"true", "yes", "1", "需要", "是"}
+
+
+def _reply_subject(subject: str) -> str:
+    subject = subject or "(无主题)"
+    if subject.lower().startswith("re:"):
+        return subject
+    return f"Re: {subject}"
+
+
+def _record_context(email_record: dict) -> str:
+    parts = [
+        f"发件人：{email_record.get('sender_name') or email_record.get('sender') or ''} <{email_record.get('sender') or ''}>",
+        f"收件人：{email_record.get('recipient') or ''}",
+        f"主题：{email_record.get('subject') or ''}",
+        f"时间：{email_record.get('date') or ''}",
+        f"摘要：{email_record.get('summary') or ''}",
+        f"正文：\n{email_record.get('raw_body_text') or email_record.get('body_text') or ''}",
+    ]
+    return "\n".join(parts)

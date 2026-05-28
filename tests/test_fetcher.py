@@ -40,6 +40,16 @@ class TestEmailFetcher(unittest.TestCase):
         result = self.fetcher._extract_attachment_names(msg)
         self.assertEqual(result, [])
 
+    def test_extract_raw_headers(self):
+        msg = MIMEText("plain text")
+        msg["Subject"] = "Hello"
+        msg["X-Test"] = "Value"
+
+        result = self.fetcher._extract_raw_headers(msg)
+
+        self.assertIn("Subject: Hello", result)
+        self.assertIn("X-Test: Value", result)
+
     def test_send_imap_id_for_netease_server(self):
         self.fetcher.imap_server = "imap.163.com"
         self.fetcher.conn = MagicMock()
