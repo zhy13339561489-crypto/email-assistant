@@ -48,3 +48,13 @@ class ReplyDecision:
 class ReplyDraft:
     subject: str
     body: str
+    reviewer_notes: str = ""
+    review_rounds: int = 0
+    review_passed: bool = False
+
+
+@dataclass
+class ReplyReview:
+    approved: bool
+    comments: str = ""
+    reason: str = ""

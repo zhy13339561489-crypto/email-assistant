@@ -37,6 +37,10 @@ def load_config(config_path: str = "config.yaml") -> dict:
         config["openai"]["base_url"] = os.getenv("OPENAI_BASE_URL")
     if os.getenv("OPENAI_MODEL"):
         config["openai"]["model"] = os.getenv("OPENAI_MODEL")
+    config["openai"]["review_model"] = os.getenv(
+        "OPENAI_MODEL2",
+        config["openai"].get("review_model", config["openai"].get("model", "")),
+    )
 
     config["mysql"] = {
         "host": _env("MYSQL_HOST", "MYSQL_IP", "DB_HOST", default="127.0.0.1"),

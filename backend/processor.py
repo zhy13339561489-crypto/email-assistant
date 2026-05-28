@@ -29,6 +29,7 @@ class EmailProcessingService:
         return AIEngine(
             api_key=openai_cfg["api_key"],
             model=openai_cfg["model"],
+            review_model=openai_cfg.get("review_model"),
             base_url=openai_cfg.get("base_url"),
             max_tokens=openai_cfg["max_tokens"],
             temperature=openai_cfg["temperature"],
@@ -36,6 +37,7 @@ class EmailProcessingService:
             retry_delay=processing_cfg["retry_delay"],
             max_body_length=processing_cfg["max_body_length"],
             categories=self.config["categories"],
+            reply_review_rounds=int(processing_cfg.get("reply_review_rounds", 3)),
         )
 
     def process_emails(self) -> int:
@@ -218,12 +220,19 @@ class EmailProcessingService:
                 return
 
             draft = self.ai.draft_reply(email_data, result)
+            draft = self.ai.refine_reply_with_reviewer(
+                _email_record(email_data, result),
+                draft,
+            )
             self.storage.save_reply_decision(
                 email_id,
                 needs_reply=True,
                 reason=decision.reason,
                 draft_subject=draft.subject,
                 draft_body=draft.body,
+                ai_review_notes=draft.reviewer_notes,
+                ai_review_rounds=draft.review_rounds,
+                ai_review_passed=draft.review_passed,
                 status="pending_review",
             )
         except Exception as e:
@@ -234,3 +243,16 @@ class EmailProcessingService:
                 reason=f"自动回复路由失败: {e}",
                 status="route_failed",
             )
+
+
+def _email_record(email_data, result) -> dict:
+    return {
+        "sender": email_data.sender,
+        "sender_name": email_data.sender_name,
+        "recipient": email_data.to,
+        "subject": email_data.subject,
+        "date": email_data.date.isoformat(timespec="seconds") if hasattr(email_data.date, "isoformat") else str(email_data.date),
+        "summary": result.summary,
+        "raw_body_text": email_data.raw_body_text or email_data.body_text,
+        "body_text": email_data.body_text,
+    }

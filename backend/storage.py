@@ -156,6 +156,9 @@ class MySQLEmailStorage:
                 draft_subject VARCHAR(1024),
                 draft_body MEDIUMTEXT,
                 reviewer_notes TEXT,
+                ai_review_notes TEXT,
+                ai_review_rounds INT NOT NULL DEFAULT 0,
+                ai_review_passed TINYINT(1) NOT NULL DEFAULT 0,
                 sent_at DATETIME NULL,
                 send_error TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -176,6 +179,7 @@ class MySQLEmailStorage:
                 self._ensure_email_mailbox_column(cursor)
                 self._ensure_email_original_columns(cursor)
                 self._ensure_logical_delete_columns(cursor)
+                self._ensure_reply_review_columns(cursor)
             conn.commit()
         logger.info(f"MySQL 数据库初始化完成: {self.config.host}:{self.config.port}/{self.config.database}")
 
@@ -209,6 +213,17 @@ class MySQLEmailStorage:
             cursor.execute(f"SHOW COLUMNS FROM {table} LIKE 'deleted_at'")
             if not cursor.fetchone():
                 cursor.execute(f"ALTER TABLE {table} ADD COLUMN deleted_at DATETIME NULL AFTER {after_column}")
+
+    def _ensure_reply_review_columns(self, cursor) -> None:
+        columns = {
+            "ai_review_notes": "TEXT AFTER reviewer_notes",
+            "ai_review_rounds": "INT NOT NULL DEFAULT 0 AFTER ai_review_notes",
+            "ai_review_passed": "TINYINT(1) NOT NULL DEFAULT 0 AFTER ai_review_rounds",
+        }
+        for name, definition in columns.items():
+            cursor.execute(f"SHOW COLUMNS FROM email_replies LIKE '{name}'")
+            if not cursor.fetchone():
+                cursor.execute(f"ALTER TABLE email_replies ADD COLUMN {name} {definition}")
 
     def _connect_database_or_create(self):
         try:
@@ -386,6 +401,9 @@ class MySQLEmailStorage:
         reason: str = "",
         draft_subject: str = "",
         draft_body: str = "",
+        ai_review_notes: str = "",
+        ai_review_rounds: int = 0,
+        ai_review_passed: bool = False,
         status: str | None = None,
     ) -> int:
         reply_status = status or ("pending_review" if needs_reply else "not_required")
@@ -394,8 +412,9 @@ class MySQLEmailStorage:
                 cursor.execute(
                     """
                     INSERT INTO email_replies
-                    (email_id, needs_reply, status, decision_reason, draft_subject, draft_body)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    (email_id, needs_reply, status, decision_reason, draft_subject, draft_body,
+                     ai_review_notes, ai_review_rounds, ai_review_passed)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE
                         id = LAST_INSERT_ID(id),
                         needs_reply = IF(status = 'sent', needs_reply, VALUES(needs_reply)),
@@ -403,10 +422,23 @@ class MySQLEmailStorage:
                         decision_reason = IF(status = 'sent', decision_reason, VALUES(decision_reason)),
                         draft_subject = IF(status = 'sent', draft_subject, VALUES(draft_subject)),
                         draft_body = IF(status = 'sent', draft_body, VALUES(draft_body)),
+                        ai_review_notes = IF(status = 'sent', ai_review_notes, VALUES(ai_review_notes)),
+                        ai_review_rounds = IF(status = 'sent', ai_review_rounds, VALUES(ai_review_rounds)),
+                        ai_review_passed = IF(status = 'sent', ai_review_passed, VALUES(ai_review_passed)),
                         send_error = IF(status = 'sent', send_error, NULL),
                         updated_at = CURRENT_TIMESTAMP
                     """,
-                    (email_id, int(needs_reply), reply_status, reason, draft_subject, draft_body),
+                    (
+                        email_id,
+                        int(needs_reply),
+                        reply_status,
+                        reason,
+                        draft_subject,
+                        draft_body,
+                        ai_review_notes,
+                        int(ai_review_rounds or 0),
+                        int(ai_review_passed),
+                    ),
                 )
                 reply_id = cursor.lastrowid
             conn.commit()
@@ -418,6 +450,9 @@ class MySQLEmailStorage:
         subject: str,
         body: str,
         reviewer_notes: str = "",
+        ai_review_notes: str = "",
+        ai_review_rounds: int = 0,
+        ai_review_passed: bool = False,
         status: str = "pending_review",
     ) -> bool:
         with self._get_conn() as conn:
@@ -428,12 +463,24 @@ class MySQLEmailStorage:
                     SET draft_subject = %s,
                         draft_body = %s,
                         reviewer_notes = %s,
+                        ai_review_notes = %s,
+                        ai_review_rounds = %s,
+                        ai_review_passed = %s,
                         status = %s,
                         send_error = NULL,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = %s AND status <> 'sent'
                     """,
-                    (subject, body, reviewer_notes, status, reply_id),
+                    (
+                        subject,
+                        body,
+                        reviewer_notes,
+                        ai_review_notes,
+                        int(ai_review_rounds or 0),
+                        int(ai_review_passed),
+                        status,
+                        reply_id,
+                    ),
                 )
                 updated = cursor.rowcount > 0
             conn.commit()
@@ -452,6 +499,9 @@ class MySQLEmailStorage:
                         r.draft_subject AS reply_subject,
                         r.draft_body AS reply_body,
                         r.reviewer_notes AS reply_reviewer_notes,
+                        r.ai_review_notes AS reply_ai_review_notes,
+                        r.ai_review_rounds AS reply_ai_review_rounds,
+                        r.ai_review_passed AS reply_ai_review_passed,
                         r.sent_at AS reply_sent_at,
                         r.send_error AS reply_send_error,
                         r.created_at AS reply_created_at,
@@ -533,6 +583,9 @@ class MySQLEmailStorage:
                         MAX(r.draft_subject) AS reply_subject,
                         MAX(r.draft_body) AS reply_body,
                         MAX(r.reviewer_notes) AS reply_reviewer_notes,
+                        MAX(r.ai_review_notes) AS reply_ai_review_notes,
+                        MAX(r.ai_review_rounds) AS reply_ai_review_rounds,
+                        MAX(r.ai_review_passed) AS reply_ai_review_passed,
                         MAX(r.sent_at) AS reply_sent_at,
                         MAX(r.send_error) AS reply_send_error
                     FROM emails e
@@ -721,6 +774,9 @@ class MySQLEmailStorage:
                 MAX(r.draft_subject) AS reply_subject,
                 MAX(r.draft_body) AS reply_body,
                 MAX(r.reviewer_notes) AS reply_reviewer_notes,
+                MAX(r.ai_review_notes) AS reply_ai_review_notes,
+                MAX(r.ai_review_rounds) AS reply_ai_review_rounds,
+                MAX(r.ai_review_passed) AS reply_ai_review_passed,
                 MAX(r.sent_at) AS reply_sent_at,
                 MAX(r.send_error) AS reply_send_error
             FROM emails e
@@ -907,6 +963,9 @@ def _normalize_reply(row: dict) -> dict | None:
         "subject": row.get("reply_subject") or "",
         "body": row.get("reply_body") or "",
         "reviewer_notes": row.get("reply_reviewer_notes") or "",
+        "ai_review_notes": row.get("reply_ai_review_notes") or "",
+        "ai_review_rounds": row.get("reply_ai_review_rounds") or 0,
+        "ai_review_passed": bool(row.get("reply_ai_review_passed")),
         "sent_at": _json_datetime(row.get("reply_sent_at")),
         "send_error": row.get("reply_send_error") or "",
     }
@@ -924,6 +983,9 @@ def _normalize_reply_email(row: dict) -> dict:
         "reply_subject": reply.get("subject") or "",
         "reply_body": reply.get("body") or "",
         "reply_reviewer_notes": reply.get("reviewer_notes") or "",
+        "reply_ai_review_notes": reply.get("ai_review_notes") or "",
+        "reply_ai_review_rounds": reply.get("ai_review_rounds") or 0,
+        "reply_ai_review_passed": reply.get("ai_review_passed", False),
         "reply_sent_at": reply.get("sent_at") or "",
         "reply_send_error": reply.get("send_error") or "",
     }

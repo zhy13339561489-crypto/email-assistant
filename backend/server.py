@@ -199,15 +199,35 @@ class BackendRuntime:
 
         current_subject = str(payload.get("subject") or reply.get("reply_subject") or "")
         current_body = str(payload.get("body") or reply.get("reply_body") or "")
-        draft = self.processor.ai.revise_reply(reply, current_subject, current_body, notes)
-        self.storage.update_reply_draft(
-            reply_id=reply_id,
-            subject=draft.subject,
-            body=draft.body,
-            reviewer_notes=notes,
-            status="pending_review",
-        )
-        return {"ok": True, "message": "AI 已根据意见改写", "subject": draft.subject, "body": draft.body}
+        try:
+            draft = self.processor.ai.revise_reply(reply, current_subject, current_body, notes)
+            draft = self.processor.ai.refine_reply_with_reviewer(reply, draft)
+            self.storage.update_reply_draft(
+                reply_id=reply_id,
+                subject=draft.subject,
+                body=draft.body,
+                reviewer_notes=notes,
+                ai_review_notes=draft.reviewer_notes,
+                ai_review_rounds=draft.review_rounds,
+                ai_review_passed=draft.review_passed,
+                status="pending_review",
+            )
+        except Exception as e:
+            logger.exception(f"AI reply revision failed for reply_id={reply_id}: {e}")
+            return {
+                "ok": False,
+                "error": f"AI 修改失败：{e}",
+            }
+
+        return {
+            "ok": True,
+            "message": "AI 已根据意见改写并完成审阅",
+            "subject": draft.subject,
+            "body": draft.body,
+            "ai_review_notes": draft.reviewer_notes,
+            "ai_review_rounds": draft.review_rounds,
+            "ai_review_passed": draft.review_passed,
+        }
 
     def send_reply(self, reply_id: int, payload: dict) -> dict:
         if not self.reply_lock.acquire(blocking=False):
@@ -310,42 +330,47 @@ def make_handler(runtime: BackendRuntime, static_dir: Path = FRONTEND_DIR):
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
-            if parsed.path == "/api/process":
-                self._send_json(runtime.process_now())
-                return
-            if parsed.path == "/api/reports/daily":
-                self._send_json(runtime.generate_daily_report())
-                return
-            if parsed.path == "/api/backfill-originals":
-                params = parse_qs(parsed.query)
-                self._send_json(
-                    runtime.backfill_originals(
-                        days=_parse_int(params.get("days", ["30"])[0], 30),
+            try:
+                if parsed.path == "/api/process":
+                    self._send_json(runtime.process_now())
+                    return
+                if parsed.path == "/api/reports/daily":
+                    self._send_json(runtime.generate_daily_report())
+                    return
+                if parsed.path == "/api/backfill-originals":
+                    params = parse_qs(parsed.query)
+                    self._send_json(
+                        runtime.backfill_originals(
+                            days=_parse_int(params.get("days", ["30"])[0], 30),
+                        )
                     )
-                )
+                    return
+                delete_action = _parse_delete_action(parsed.path)
+                if delete_action:
+                    item_id, item_type = delete_action
+                    if item_type == "email":
+                        self._send_json(runtime.delete_email(item_id))
+                        return
+                    if item_type == "action":
+                        self._send_json(runtime.delete_action_item(item_id))
+                        return
+                reply_action = _parse_reply_action(parsed.path)
+                if reply_action:
+                    reply_id, action = reply_action
+                    payload = self._read_json()
+                    if action == "save":
+                        self._send_json(runtime.save_reply_draft(reply_id, payload))
+                        return
+                    if action == "revise":
+                        self._send_json(runtime.revise_reply(reply_id, payload))
+                        return
+                    if action == "send":
+                        self._send_json(runtime.send_reply(reply_id, payload))
+                        return
+            except Exception as e:
+                logger.exception(f"API request failed: {parsed.path}: {e}")
+                self._send_json({"ok": False, "error": str(e)}, status=500)
                 return
-            delete_action = _parse_delete_action(parsed.path)
-            if delete_action:
-                item_id, item_type = delete_action
-                if item_type == "email":
-                    self._send_json(runtime.delete_email(item_id))
-                    return
-                if item_type == "action":
-                    self._send_json(runtime.delete_action_item(item_id))
-                    return
-            reply_action = _parse_reply_action(parsed.path)
-            if reply_action:
-                reply_id, action = reply_action
-                payload = self._read_json()
-                if action == "save":
-                    self._send_json(runtime.save_reply_draft(reply_id, payload))
-                    return
-                if action == "revise":
-                    self._send_json(runtime.revise_reply(reply_id, payload))
-                    return
-                if action == "send":
-                    self._send_json(runtime.send_reply(reply_id, payload))
-                    return
             self.send_error(404)
 
         def log_message(self, fmt: str, *args) -> None:

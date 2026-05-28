@@ -2,9 +2,10 @@ import json
 import time
 from pathlib import Path
 
+import httpx
 from loguru import logger
 
-from src.models import ActionItem, ClassificationResult, EmailData, ProcessResult, ReplyDecision, ReplyDraft
+from src.models import ActionItem, ClassificationResult, EmailData, ProcessResult, ReplyDecision, ReplyDraft, ReplyReview
 from src.preprocessor import EmailPreprocessor
 
 try:
@@ -18,23 +19,33 @@ except ImportError:
 
 class AIEngine:
     def __init__(self, api_key: str, model: str = "gpt-4o-mini",
-                 base_url: str | None = None,
+                 review_model: str | None = None, base_url: str | None = None,
                  max_tokens: int = 500, temperature: float = 0.1,
                  retry_count: int = 3, retry_delay: int = 1,
-                 max_body_length: int = 2000, categories: list[str] | None = None):
+                 max_body_length: int = 2000, categories: list[str] | None = None,
+                 reply_review_rounds: int = 3):
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
+        self.review_model = review_model or model
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.retry_count = retry_count
         self.retry_delay = retry_delay
+        self.reply_review_rounds = max(1, int(reply_review_rounds or 3))
         self.preprocessor = EmailPreprocessor(max_body_length)
         self.categories = categories or [
             "工作", "财务", "订阅通知", "社交", "促销广告", "重要紧急", "垃圾邮件", "其他"
         ]
         self._prompts = self._load_prompts()
         self._llm = None
+        self._review_llm = None
+        self._http_client = None
+
+    def _get_http_client(self):
+        if self._http_client is None:
+            self._http_client = httpx.Client(trust_env=False, timeout=120.0)
+        return self._http_client
 
     def _load_prompts(self) -> dict[str, str]:
         prompts = {}
@@ -57,6 +68,18 @@ class AIEngine:
                 else:
                     raise
 
+    def _call_reviewer_api(self, messages: list[dict]) -> str:
+        for attempt in range(self.retry_count):
+            try:
+                response = self._get_reviewer_llm().invoke(self._to_langchain_messages(messages))
+                return self._normalize_response_content(response.content)
+            except Exception as e:
+                logger.warning(f"Reviewer LangChain call failed (attempt {attempt + 1}/{self.retry_count}): {e}")
+                if attempt < self.retry_count - 1:
+                    time.sleep(self.retry_delay * (2 ** attempt))
+                else:
+                    raise
+
     def _get_llm(self):
         if self._llm is not None:
             return self._llm
@@ -70,12 +93,34 @@ class AIEngine:
             "api_key": self.api_key,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
+            "http_client": self._get_http_client(),
         }
         if self.base_url:
             kwargs["base_url"] = self.base_url
 
         self._llm = ChatOpenAI(**kwargs)
         return self._llm
+
+    def _get_reviewer_llm(self):
+        if self._review_llm is not None:
+            return self._review_llm
+        if ChatOpenAI is None:
+            raise RuntimeError(
+                "缂哄皯 LangChain 渚濊禆锛岃鍏堣繍琛岋細pip install -r requirements.txt"
+            )
+
+        kwargs = {
+            "model": self.review_model,
+            "api_key": self.api_key,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "http_client": self._get_http_client(),
+        }
+        if self.base_url:
+            kwargs["base_url"] = self.base_url
+
+        self._review_llm = ChatOpenAI(**kwargs)
+        return self._review_llm
 
     def _to_langchain_messages(self, messages: list[dict]):
         if HumanMessage is None or SystemMessage is None:
@@ -265,6 +310,71 @@ class AIEngine:
             body=str(data.get("body") or current_body or ""),
         )
 
+    def review_reply(self, email_record: dict, subject: str, body: str) -> ReplyReview:
+        prompt = (
+            "你是邮件回复审阅者。请严格审阅回复草稿是否可以发送。\n"
+            "审阅标准：必须准确回应原邮件；语气礼貌；不编造原邮件没有的信息；"
+            "没有明显事实错误、空泛占位符或不合适承诺。\n"
+            "如果还需要修改，提出清晰可执行的修改意见。\n"
+            "只返回 JSON：{\"approved\": true/false, \"comments\": \"修改意见\", \"reason\": \"判断理由\"}。"
+        )
+        user_prompt = (
+            f"原始邮件：\n{_record_context(email_record)}\n\n"
+            f"回复主题：{subject}\n\n"
+            f"回复正文：\n{body}"
+        )
+        data = self._parse_json(self._call_reviewer_api([
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": user_prompt},
+        ]))
+        if not isinstance(data, dict):
+            data = {}
+        return ReplyReview(
+            approved=_to_bool(data.get("approved")),
+            comments=str(data.get("comments") or ""),
+            reason=str(data.get("reason") or ""),
+        )
+
+    def refine_reply_with_reviewer(
+        self,
+        email_record: dict,
+        draft: ReplyDraft,
+        max_rounds: int | None = None,
+    ) -> ReplyDraft:
+        subject = draft.subject
+        body = draft.body
+        rounds = max(1, int(max_rounds or self.reply_review_rounds))
+        last_review = ReplyReview(False, "", "")
+
+        for round_index in range(1, rounds + 1):
+            last_review = self.review_reply(email_record, subject, body)
+            notes = _review_notes(last_review, round_index)
+            if last_review.approved:
+                return ReplyDraft(
+                    subject=subject,
+                    body=body,
+                    reviewer_notes=notes,
+                    review_rounds=round_index,
+                    review_passed=True,
+                )
+
+            revision = self.revise_reply(
+                email_record,
+                subject,
+                body,
+                last_review.comments or last_review.reason or "请根据原始邮件进一步改进回复。",
+            )
+            subject = revision.subject
+            body = revision.body
+
+        return ReplyDraft(
+            subject=subject,
+            body=body,
+            reviewer_notes=_review_notes(last_review, rounds),
+            review_rounds=rounds,
+            review_passed=False,
+        )
+
     def generate_daily_report(self, emails: list[dict], start_at: str, end_at: str) -> str:
         if not emails:
             return f"邮件日报（{start_at} ~ {end_at}）\n\n该时间段内没有已处理邮件。"
@@ -340,4 +450,14 @@ def _record_context(email_record: dict) -> str:
         f"摘要：{email_record.get('summary') or ''}",
         f"正文：\n{email_record.get('raw_body_text') or email_record.get('body_text') or ''}",
     ]
+    return "\n".join(parts)
+
+
+def _review_notes(review: ReplyReview, round_index: int) -> str:
+    verdict = "通过" if review.approved else "未通过"
+    parts = [f"审阅第 {round_index} 轮：{verdict}"]
+    if review.reason:
+        parts.append(f"理由：{review.reason}")
+    if review.comments:
+        parts.append(f"意见：{review.comments}")
     return "\n".join(parts)

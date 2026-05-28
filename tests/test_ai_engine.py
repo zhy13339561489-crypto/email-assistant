@@ -78,6 +78,44 @@ class TestAIEngine(unittest.TestCase):
         self.assertEqual(draft.subject, "Re: Hello")
         self.assertIn("已收到", draft.body)
 
+    def test_refine_reply_with_reviewer_loops_until_approved(self):
+        class FakeWriterLLM:
+            def invoke(self, messages):
+                return SimpleNamespace(content='{"subject": "Re: Hello", "body": "您好，已补充说明。"}')
+
+        class FakeReviewerLLM:
+            def __init__(self):
+                self.responses = [
+                    '{"approved": false, "comments": "需要更具体", "reason": "回复偏空泛"}',
+                    '{"approved": true, "comments": "可以发送", "reason": "内容准确礼貌"}',
+                ]
+
+            def invoke(self, messages):
+                return SimpleNamespace(content=self.responses.pop(0))
+
+        from src.models import ReplyDraft
+
+        self.engine._llm = FakeWriterLLM()
+        self.engine._review_llm = FakeReviewerLLM()
+        self.engine._to_langchain_messages = lambda messages: messages
+
+        draft = self.engine.refine_reply_with_reviewer(
+            {
+                "sender": "sender@example.com",
+                "sender_name": "Sender",
+                "recipient": "me@example.com",
+                "subject": "Hello",
+                "summary": "请求确认",
+                "raw_body_text": "请确认。",
+            },
+            ReplyDraft("Re: Hello", "您好。"),
+            max_rounds=2,
+        )
+
+        self.assertTrue(draft.review_passed)
+        self.assertEqual(draft.review_rounds, 2)
+        self.assertIn("补充说明", draft.body)
+
 
 if __name__ == "__main__":
     unittest.main()

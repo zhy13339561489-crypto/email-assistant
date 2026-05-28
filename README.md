@@ -42,6 +42,7 @@ MYSQL_CHARSET=utf8mb4
 OPENAI_API_KEY=your_api_key
 OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 OPENAI_MODEL=qwen3-vl-235b-a22b-thinking
+OPENAI_MODEL2=your_reviewer_model_name
 ```
 
 MySQL 数据库需要先存在，后端启动后会自动创建 `emails`、`action_items`、`email_replies` 和日报相关表。
@@ -63,6 +64,7 @@ python main.py backend --host 127.0.0.1 --port 8765
 - 前端“生成日报”按钮会请求 `POST /api/reports/daily`
 - 前端有“收件箱 / 垃圾邮件箱”切换，分类为 `垃圾邮件` 的邮件会进入单独的垃圾邮件箱
 - AI 会在每封邮件处理后判断是否需要回复；需要回复时生成草稿，由前端人工审核、修改或让 AI 按意见改写，审核通过后才通过 SMTP 发送
+- `OPENAI_MODEL2` 使用与老模型相同的 API Key 和 Base URL，作为回复审阅模型；审阅不通过时老模型会根据意见重写并再次审阅
 
 常用参数：
 

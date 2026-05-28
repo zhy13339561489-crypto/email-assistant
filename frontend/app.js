@@ -42,6 +42,7 @@ const els = {
   replySection: document.querySelector("#replySection"),
   replyStatus: document.querySelector("#replyStatus"),
   replyReason: document.querySelector("#replyReason"),
+  replyAiReview: document.querySelector("#replyAiReview"),
   replySubject: document.querySelector("#replySubject"),
   replyBody: document.querySelector("#replyBody"),
   replyNotes: document.querySelector("#replyNotes"),
@@ -117,7 +118,13 @@ async function generateDailyReport() {
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
-    const result = await response.json();
+    const text = await response.text();
+    let result = {};
+    try {
+      result = text ? JSON.parse(text) : {};
+    } catch {
+      result = { error: text || `HTTP ${response.status}` };
+    }
     if (result.error) {
       throw new Error(result.error);
     }
@@ -426,6 +433,7 @@ function renderReplyReview(reply) {
   els.replyStatus.textContent = replyLabel(reply);
   els.replyStatus.className = `reply-status ${reply?.status || "none"}`;
   els.replyReason.textContent = reply?.reason || "该邮件还没有回复路由结果。";
+  els.replyAiReview.textContent = formatAiReview(reply);
   els.replySubject.value = reply?.subject || "";
   els.replyBody.value = reply?.body || "";
   els.replyNotes.value = reply?.reviewer_notes || "";
@@ -477,7 +485,13 @@ async function submitReplyAction(action) {
         reviewer_notes: els.replyNotes.value,
       }),
     });
-    const result = await response.json();
+    const text = await response.text();
+    let result = {};
+    try {
+      result = text ? JSON.parse(text) : {};
+    } catch {
+      result = { error: text || `HTTP ${response.status}` };
+    }
     if (!response.ok || result.error || result.ok === false) {
       throw new Error(result.error || `HTTP ${response.status}`);
     }
@@ -493,16 +507,31 @@ async function submitReplyAction(action) {
       subject: els.replySubject.value,
       body: els.replyBody.value,
       reviewer_notes: els.replyNotes.value,
+      ai_review_notes: result.ai_review_notes || reply.ai_review_notes || "",
+      ai_review_rounds: result.ai_review_rounds ?? reply.ai_review_rounds ?? 0,
+      ai_review_passed: result.ai_review_passed ?? reply.ai_review_passed ?? false,
       status: action === "send" ? "sent" : "pending_review",
       send_error: "",
     };
     renderReplyReview(selectedEmail.reply);
     await loadDashboard();
   } catch (error) {
-    els.replyMessage.textContent = error.message;
+    els.replyMessage.textContent = formatRequestError(error);
   } finally {
     setReplyBusy(false);
   }
+}
+
+function formatRequestError(error) {
+  const message = error?.message || "请求失败";
+  if (
+    message.includes("NetworkError") ||
+    message.includes("Failed to fetch") ||
+    message.includes("Load failed")
+  ) {
+    return "无法连接后端，请确认后端服务正在运行，然后重试。";
+  }
+  return message;
 }
 
 function setReplyBusy(isBusy) {
@@ -574,6 +603,15 @@ function replyLabel(reply) {
     send_failed: "发送失败",
   };
   return labels[reply.status] || "待审核";
+}
+
+function formatAiReview(reply) {
+  if (!reply?.ai_review_notes) {
+    return "-";
+  }
+  const status = reply.ai_review_passed ? "审阅通过" : "审阅未完全通过";
+  const rounds = reply.ai_review_rounds ? ` · ${reply.ai_review_rounds} 轮` : "";
+  return `${status}${rounds}\n${reply.ai_review_notes}`;
 }
 
 els.daysSelect.addEventListener("change", () => {
