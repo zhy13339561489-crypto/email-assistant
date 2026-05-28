@@ -1,0 +1,45 @@
+# Email AI 自动整理工具配置
+
+# 邮箱账户配置（所有字段从 .env 读取，格式：EMAIL_{NAME}_ADDRESS / _IMAP_SERVER / _PASSWORD 等）
+email_accounts:
+  - name: user
+
+# OpenAI 兼容 API 配置（DashScope）
+openai:
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  model: qwen3-vl-235b-a22b-thinking
+  max_tokens: 500
+  temperature: 0.1
+
+# 邮件分类
+categories:
+  - 工作
+  - 财务
+  - 订阅通知
+  - 社交
+  - 促销广告
+  - 重要紧急
+  - 垃圾邮件
+  - 其他
+
+# 处理设置
+processing:
+  max_body_length: 2000
+  batch_size: 5
+  retry_count: 3
+  retry_delay: 1
+
+# 调度设置
+schedule:
+  check_interval_minutes: 30
+  daily_report_time: "09:00"
+  weekly_report_day: monday
+
+# 数据库路径
+database:
+  path: data/emails.db
+
+# 日志设置
+logging:
+  level: INFO
+  file: data/email_ai.log

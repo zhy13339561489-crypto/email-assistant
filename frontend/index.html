@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>邮件处理结果</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Email AI</p>
+        <h1>邮件处理结果</h1>
+      </div>
+      <div class="toolbar" aria-label="筛选工具">
+        <label class="field">
+          <span>范围</span>
+          <select id="daysSelect">
+            <option value="1">今天</option>
+            <option value="7">近 7 天</option>
+            <option value="30" selected>近 30 天</option>
+            <option value="90">近 90 天</option>
+          </select>
+        </label>
+        <label class="search">
+          <span>搜索</span>
+          <input id="searchInput" type="search" placeholder="主题、摘要、发件人">
+        </label>
+        <button id="refreshBtn" class="primary" type="button">刷新</button>
+      </div>
+    </header>
+
+    <section class="stats-grid" aria-label="概览">
+      <article class="metric">
+        <span>处理邮件</span>
+        <strong id="totalCount">0</strong>
+      </article>
+      <article class="metric">
+        <span>待办邮件</span>
+        <strong id="actionCount">0</strong>
+      </article>
+      <article class="metric">
+        <span>平均置信度</span>
+        <strong id="confidenceAvg">0%</strong>
+      </article>
+      <article class="metric">
+        <span>含附件</span>
+        <strong id="attachmentCount">0</strong>
+      </article>
+    </section>
+
+    <section class="layout">
+      <aside class="side-panel">
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>分类分布</h2>
+          </div>
+          <div id="categoryTabs" class="segments" aria-label="分类筛选"></div>
+          <div id="categoryChart" class="chart"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>待办事项</h2>
+          </div>
+          <div id="actionList" class="action-list"></div>
+        </section>
+      </aside>
+
+      <section class="content-panel">
+        <div class="panel-heading results-heading">
+          <div>
+            <h2>邮件列表</h2>
+            <p id="resultMeta" class="muted">正在加载</p>
+          </div>
+          <div id="statusPill" class="status-pill">同步中</div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>分类</th>
+                <th>主题</th>
+                <th>发件人</th>
+                <th>置信度</th>
+                <th>待办</th>
+              </tr>
+            </thead>
+            <tbody id="emailTable"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <aside id="detailPanel" class="detail-panel" aria-live="polite">
+    <div class="detail-heading">
+      <div>
+        <p id="detailCategory" class="eyebrow">未选择</p>
+        <h2 id="detailSubject">选择一封邮件</h2>
+      </div>
+      <button id="closeDetailBtn" class="ghost" type="button">关闭</button>
+    </div>
+    <dl class="detail-meta">
+      <div>
+        <dt>发件人</dt>
+        <dd id="detailSender">-</dd>
+      </div>
+      <div>
+        <dt>时间</dt>
+        <dd id="detailDate">-</dd>
+      </div>
+      <div>
+        <dt>账号</dt>
+        <dd id="detailAccount">-</dd>
+      </div>
+    </dl>
+    <section>
+      <h3>摘要</h3>
+      <p id="detailSummary" class="detail-text">-</p>
+    </section>
+    <section>
+      <h3>分类依据</h3>
+      <p id="detailReason" class="detail-text">-</p>
+    </section>
+    <section>
+      <h3>待办预览</h3>
+      <p id="detailActions" class="detail-text">-</p>
+    </section>
+  </aside>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
