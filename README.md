@@ -50,9 +50,11 @@ python main.py backend --host 127.0.0.1 --port 8765
 
 - 启动后立即检查一次未读新邮件
 - 之后按 `config.yaml` 的 `schedule.check_interval_minutes` 持续轮询
+- 每天 17:00 会处理昨天 17:00 到今天 17:00 的所有邮件，并由 AI 生成日报存入 MySQL
 - 前端页面可访问 `http://127.0.0.1:8765`
 - 前端“立即处理”按钮会请求 `POST /api/process`
 - 前端列表数据来自 `GET /api/dashboard`
+- 前端“生成日报”按钮会请求 `POST /api/reports/daily`
 
 常用参数：
 
@@ -71,6 +73,8 @@ python main.py backend --no-auto
 - `GET /api/health`：后端健康状态和最近一次处理状态
 - `GET /api/dashboard?days=30&category=all&q=`：邮件处理结果、统计、分类、待办
 - `POST /api/process`：立即检查未读邮件并处理
+- `POST /api/reports/daily`：立即生成一份 AI 日报
+- `GET /api/reports/latest`：读取最新 AI 日报
 
 ## 项目结构
 

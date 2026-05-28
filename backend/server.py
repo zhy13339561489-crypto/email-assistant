@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from loguru import logger
 
@@ -29,6 +30,15 @@ class BackendRuntime:
         self.last_process: dict = {
             "running": False,
             "processed": 0,
+            "started_at": "",
+            "finished_at": "",
+            "error": "",
+        }
+        self.report_lock = threading.Lock()
+        self.last_report: dict = {
+            "running": False,
+            "report_id": "",
+            "email_count": 0,
             "started_at": "",
             "finished_at": "",
             "error": "",
@@ -73,11 +83,56 @@ class BackendRuntime:
         finally:
             self.process_lock.release()
 
+    def generate_daily_report(self) -> dict:
+        if not self.report_lock.acquire(blocking=False):
+            return {"running": True, "message": "已有日报任务正在运行", **self.last_report}
+
+        self.last_report = {
+            "running": True,
+            "report_id": "",
+            "email_count": 0,
+            "started_at": datetime.now().isoformat(timespec="seconds"),
+            "finished_at": "",
+            "error": "",
+        }
+        try:
+            report = self.processor.generate_daily_report(
+                end_at=datetime.now().replace(second=0, microsecond=0)
+            )
+            self.last_report.update(
+                {
+                    "running": False,
+                    "report_id": report["report_id"],
+                    "email_count": report["email_count"],
+                    "finished_at": datetime.now().isoformat(timespec="seconds"),
+                    "error": "",
+                }
+            )
+            return {"running": False, "message": "日报生成完成", **self.last_report, "report": report}
+        except Exception as e:
+            logger.exception(f"邮件日报任务失败: {e}")
+            self.last_report.update(
+                {
+                    "running": False,
+                    "report_id": "",
+                    "email_count": 0,
+                    "finished_at": datetime.now().isoformat(timespec="seconds"),
+                    "error": str(e),
+                }
+            )
+            return {"running": False, "message": "日报生成失败", **self.last_report}
+        finally:
+            self.report_lock.release()
+
+    def latest_daily_report(self) -> dict:
+        return {"report": self.storage.get_latest_daily_report()}
+
     def health(self) -> dict:
         return {
             "ok": True,
             "database": "mysql",
             "last_process": self.last_process,
+            "last_report": self.last_report,
         }
 
 
@@ -100,12 +155,18 @@ def make_handler(runtime: BackendRuntime, static_dir: Path = FRONTEND_DIR):
                     )
                 )
                 return
+            if parsed.path == "/api/reports/latest":
+                self._send_json(runtime.latest_daily_report())
+                return
             self._send_static(parsed.path)
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
             if parsed.path == "/api/process":
                 self._send_json(runtime.process_now())
+                return
+            if parsed.path == "/api/reports/daily":
+                self._send_json(runtime.generate_daily_report())
                 return
             self.send_error(404)
 
@@ -165,8 +226,19 @@ def run_backend(
             next_run_time=datetime.now(),
             replace_existing=True,
         )
-        scheduler.start()
         logger.info(f"自动邮件处理已启动：每 {interval} 分钟检查一次，启动后立即执行")
+
+        report_hour, report_minute = _parse_report_time(config["schedule"].get("daily_report_time", "17:00"))
+        scheduler.add_job(
+            runtime.generate_daily_report,
+            trigger=CronTrigger(hour=report_hour, minute=report_minute),
+            id="daily_ai_report",
+            name="AI 每日邮件汇总报告",
+            replace_existing=True,
+        )
+        logger.info(f"AI 邮件日报已启动：每天 {report_hour:02d}:{report_minute:02d} 生成")
+
+        scheduler.start()
 
     server = ThreadingHTTPServer((host, port), make_handler(runtime))
     logger.info(f"后端服务已启动: http://{host}:{port}")
@@ -184,3 +256,11 @@ def _parse_int(value: str, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _parse_report_time(value: str) -> tuple[int, int]:
+    try:
+        hour_text, minute_text = value.split(":", 1)
+        return int(hour_text), int(minute_text)
+    except (AttributeError, ValueError):
+        return 17, 0

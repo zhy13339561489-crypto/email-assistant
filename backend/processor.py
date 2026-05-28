@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from loguru import logger
 
 from ai_engine import AIEngine
@@ -42,6 +44,43 @@ class EmailProcessingService:
             total_processed += self._process_account(account_cfg)
         return total_processed
 
+    def process_window(self, start: datetime, end: datetime) -> int:
+        total_processed = 0
+        for account_cfg in self.config["email_accounts"]:
+            total_processed += self._process_account_window(account_cfg, start, end)
+        return total_processed
+
+    def generate_daily_report(self, end_at: datetime | None = None) -> dict:
+        window_end = end_at or datetime.now().replace(second=0, microsecond=0)
+        window_start = window_end - timedelta(days=1)
+        logger.info(f"开始生成邮件日报: {window_start} ~ {window_end}")
+
+        processed = self.process_window(window_start, window_end)
+        emails = self.storage.get_emails_between(window_start, window_end)
+        content = self.ai.generate_daily_report(
+            emails,
+            start_at=window_start.strftime("%Y-%m-%d %H:%M"),
+            end_at=window_end.strftime("%Y-%m-%d %H:%M"),
+        )
+        report_id = self.storage.save_daily_report(
+            report_date=window_end.date(),
+            window_start=window_start,
+            window_end=window_end,
+            email_count=len(emails),
+            content=content,
+        )
+        logger.info(
+            f"邮件日报生成完成: report_id={report_id}, 新处理 {processed} 封，报告包含 {len(emails)} 封"
+        )
+        return {
+            "report_id": report_id,
+            "processed": processed,
+            "email_count": len(emails),
+            "window_start": window_start.isoformat(timespec="seconds"),
+            "window_end": window_end.isoformat(timespec="seconds"),
+            "content": content,
+        }
+
     def _process_account(self, account_cfg: dict) -> int:
         if not account_cfg.get("password"):
             logger.warning(f"账户 {account_cfg['name']} 未配置密码，跳过")
@@ -75,6 +114,46 @@ class EmailProcessingService:
             return len(results)
         except Exception as e:
             logger.error(f"处理账户 {account_cfg['name']} 失败: {e}")
+            return 0
+        finally:
+            fetcher.disconnect()
+
+    def _process_account_window(self, account_cfg: dict, start: datetime, end: datetime) -> int:
+        if not account_cfg.get("password"):
+            logger.warning(f"账户 {account_cfg['name']} 未配置密码，跳过")
+            return 0
+
+        logger.info(f"检查账户时间窗口邮件: {account_cfg['address']} ({start} ~ {end})")
+        fetcher = EmailFetcher(
+            address=account_cfg["address"],
+            imap_server=account_cfg["imap_server"],
+            imap_port=account_cfg["imap_port"],
+            password=account_cfg["password"],
+            use_ssl=account_cfg.get("use_ssl", True),
+        )
+
+        try:
+            fetcher.connect()
+            emails = fetcher.fetch_between(start, end)
+            new_emails = [
+                email_data
+                for email_data in emails
+                if not self.storage.has_email(email_data.uid, account=account_cfg["name"])
+            ]
+            if not new_emails:
+                logger.info(f"账户 {account_cfg['name']} 时间窗口内没有未处理邮件")
+                return 0
+
+            for email_data in new_emails:
+                self.preprocessor.process(email_data)
+
+            results = self.ai.process_batch(new_emails)
+            for email_data, result in results:
+                self.storage.save_result(email_data, result, account=account_cfg["name"])
+                logger.info(f"  [{result.classification.category}] {email_data.subject[:50]}")
+            return len(results)
+        except Exception as e:
+            logger.error(f"处理账户 {account_cfg['name']} 时间窗口邮件失败: {e}")
             return 0
         finally:
             fetcher.disconnect()

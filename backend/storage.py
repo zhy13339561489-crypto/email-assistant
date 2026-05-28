@@ -124,6 +124,19 @@ class MySQLEmailStorage:
                     ON DELETE CASCADE
             ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
             """,
+            """
+            CREATE TABLE IF NOT EXISTS daily_reports (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                report_date DATE NOT NULL,
+                window_start DATETIME NOT NULL,
+                window_end DATETIME NOT NULL,
+                email_count INT NOT NULL DEFAULT 0,
+                content MEDIUMTEXT,
+                generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY idx_report_window (window_start, window_end),
+                KEY idx_report_date (report_date)
+            ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+            """,
         ]
         conn = self._connect_database_or_create()
         with conn:
@@ -198,6 +211,92 @@ class MySQLEmailStorage:
                     )
             conn.commit()
             return email_id
+
+    def has_email(self, uid: str, account: str = "") -> bool:
+        with self._get_conn() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id FROM emails WHERE uid = %s AND account = %s LIMIT 1",
+                    (uid, account),
+                )
+                return cursor.fetchone() is not None
+
+    def get_emails_between(self, start: datetime, end: datetime) -> list[dict]:
+        with self._get_conn() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT
+                        e.*,
+                        COUNT(a.id) AS action_count,
+                        GROUP_CONCAT(a.action SEPARATOR ' || ') AS action_preview
+                    FROM emails e
+                    LEFT JOIN action_items a ON a.email_id = e.id
+                    WHERE e.date >= %s AND e.date < %s
+                    GROUP BY e.id
+                    ORDER BY e.date DESC
+                    """,
+                    (_to_mysql_datetime(start), _to_mysql_datetime(end)),
+                )
+                return [_normalize_email(row) for row in cursor.fetchall()]
+
+    def save_daily_report(
+        self,
+        report_date: date,
+        window_start: datetime,
+        window_end: datetime,
+        email_count: int,
+        content: str,
+    ) -> int:
+        with self._get_conn() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO daily_reports
+                    (report_date, window_start, window_end, email_count, content)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE
+                        id = LAST_INSERT_ID(id),
+                        report_date = VALUES(report_date),
+                        email_count = VALUES(email_count),
+                        content = VALUES(content),
+                        generated_at = CURRENT_TIMESTAMP
+                    """,
+                    (
+                        report_date,
+                        _to_mysql_datetime(window_start),
+                        _to_mysql_datetime(window_end),
+                        email_count,
+                        content,
+                    ),
+                )
+                report_id = cursor.lastrowid
+            conn.commit()
+            return report_id
+
+    def get_latest_daily_report(self) -> dict | None:
+        with self._get_conn() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM daily_reports
+                    ORDER BY window_end DESC
+                    LIMIT 1
+                    """
+                )
+                row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row["id"],
+            "report_date": _json_date(row.get("report_date")),
+            "window_start": _json_datetime(row.get("window_start")),
+            "window_end": _json_datetime(row.get("window_end")),
+            "email_count": row.get("email_count") or 0,
+            "content": row.get("content") or "",
+            "generated_at": _json_datetime(row.get("generated_at")),
+        }
 
     def get_dashboard(self, days: int = 30, category: str = "all", query: str = "") -> dict:
         days = max(1, min(int(days or 30), 365))
@@ -394,6 +493,14 @@ def _json_datetime(value) -> str:
         return ""
     if isinstance(value, datetime):
         return value.isoformat(timespec="seconds")
+    return str(value)
+
+
+def _json_date(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, date):
+        return value.isoformat()
     return str(value)
 
 

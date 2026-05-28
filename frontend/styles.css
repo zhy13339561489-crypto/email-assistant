@@ -359,6 +359,30 @@ h3 {
   line-height: 1.4;
 }
 
+.report-box {
+  display: grid;
+  gap: 10px;
+}
+
+.report-meta {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.report-content {
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--panel-soft);
+  color: #33413e;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
 .table-wrap {
   overflow-x: auto;
 }

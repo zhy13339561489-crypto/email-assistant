@@ -2,7 +2,7 @@ import imaplib
 import email
 import email.message
 from email.header import decode_header
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 from loguru import logger
 
@@ -158,6 +158,16 @@ class EmailFetcher:
                 logger.error(f"获取邮件 {uid} 失败: {e}")
         return emails
 
+    def fetch_between(self, start: datetime, end: datetime) -> list[EmailData]:
+        start_naive = _to_naive_datetime(start)
+        end_naive = _to_naive_datetime(end)
+        emails = self.fetch_by_date(start.date(), (end + timedelta(days=1)).date())
+        return [
+            email_data
+            for email_data in emails
+            if start_naive <= _to_naive_datetime(email_data.date) < end_naive
+        ]
+
     def mark_as_read(self, uid: bytes) -> None:
         self.conn.store(uid, "+FLAGS", "\\Seen")
 
@@ -236,3 +246,9 @@ class EmailFetcher:
                 if filename:
                     names.append(self._decode_header(filename))
         return names
+
+
+def _to_naive_datetime(value: datetime) -> datetime:
+    if value.tzinfo:
+        return value.astimezone().replace(tzinfo=None)
+    return value

@@ -28,6 +28,7 @@
           <input id="searchInput" type="search" placeholder="主题、摘要、发件人">
         </label>
         <button id="processBtn" class="secondary" type="button">立即处理</button>
+        <button id="reportBtn" class="secondary" type="button">生成日报</button>
         <button id="refreshBtn" class="primary" type="button">刷新</button>
       </div>
     </header>
@@ -66,6 +67,13 @@
             <h2>待办事项</h2>
           </div>
           <div id="actionList" class="action-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>最新日报</h2>
+          </div>
+          <div id="reportBox" class="report-box"></div>
         </section>
       </aside>
 

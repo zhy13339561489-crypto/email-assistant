@@ -10,6 +10,7 @@ const els = {
   daysSelect: document.querySelector("#daysSelect"),
   searchInput: document.querySelector("#searchInput"),
   processBtn: document.querySelector("#processBtn"),
+  reportBtn: document.querySelector("#reportBtn"),
   refreshBtn: document.querySelector("#refreshBtn"),
   totalCount: document.querySelector("#totalCount"),
   actionCount: document.querySelector("#actionCount"),
@@ -18,6 +19,7 @@ const els = {
   categoryTabs: document.querySelector("#categoryTabs"),
   categoryChart: document.querySelector("#categoryChart"),
   actionList: document.querySelector("#actionList"),
+  reportBox: document.querySelector("#reportBox"),
   emailTable: document.querySelector("#emailTable"),
   resultMeta: document.querySelector("#resultMeta"),
   statusPill: document.querySelector("#statusPill"),
@@ -59,6 +61,7 @@ async function loadDashboard() {
     state.emails = data.emails || [];
     state.categories = data.categories || [];
     renderDashboard(data);
+    loadLatestReport();
     setStatus("已同步", "ok");
   } catch (error) {
     setStatus("加载失败", "error");
@@ -69,6 +72,43 @@ async function loadDashboard() {
     cell.appendChild(emptyState(`无法加载数据：${error.message}`));
     row.appendChild(cell);
     els.emailTable.appendChild(row);
+  }
+}
+
+async function loadLatestReport() {
+  try {
+    const response = await fetch("/api/reports/latest", {
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      return;
+    }
+    const data = await response.json();
+    renderLatestReport(data.report);
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+async function generateDailyReport() {
+  setStatus("生成日报");
+  els.reportBtn.disabled = true;
+  try {
+    const response = await fetch("/api/reports/daily", { method: "POST" });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const result = await response.json();
+    if (result.error) {
+      throw new Error(result.error);
+    }
+    setStatus("日报完成", "ok");
+    await loadLatestReport();
+  } catch (error) {
+    setStatus("日报失败", "error");
+    console.error(error);
+  } finally {
+    els.reportBtn.disabled = false;
   }
 }
 
@@ -185,6 +225,24 @@ function renderActions(actions) {
     card.append(action, source, deadline);
     els.actionList.appendChild(card);
   });
+}
+
+function renderLatestReport(report) {
+  els.reportBox.innerHTML = "";
+  if (!report) {
+    els.reportBox.appendChild(emptyState("暂无日报"));
+    return;
+  }
+
+  const meta = document.createElement("div");
+  meta.className = "report-meta";
+  meta.textContent = `${formatDateTime(report.window_start)} 至 ${formatDateTime(report.window_end)} · ${report.email_count || 0} 封`;
+
+  const content = document.createElement("div");
+  content.className = "report-content";
+  content.textContent = report.content || "日报内容为空";
+
+  els.reportBox.append(meta, content);
 }
 
 function renderEmails(emails) {
@@ -320,6 +378,7 @@ els.searchInput.addEventListener("input", () => {
 
 els.refreshBtn.addEventListener("click", loadDashboard);
 els.processBtn.addEventListener("click", processNow);
+els.reportBtn.addEventListener("click", generateDailyReport);
 els.closeDetailBtn.addEventListener("click", () => els.detailPanel.classList.remove("open"));
 
 window.addEventListener("keydown", (event) => {

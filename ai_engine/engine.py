@@ -186,6 +186,38 @@ class AIEngine:
                 logger.error(f"处理邮件失败 [{email_data.subject}]: {e}")
         return results
 
+    def generate_daily_report(self, emails: list[dict], start_at: str, end_at: str) -> str:
+        if not emails:
+            return f"邮件日报（{start_at} ~ {end_at}）\n\n该时间段内没有已处理邮件。"
+
+        lines = []
+        for index, email_data in enumerate(emails, start=1):
+            actions = email_data.get("action_preview") or ""
+            action_text = f"\n待办：{actions}" if actions else ""
+            lines.append(
+                f"{index}. [{email_data.get('category', '未分类')}] "
+                f"{email_data.get('subject', '(无主题)')}\n"
+                f"发件人：{email_data.get('sender_name') or email_data.get('sender') or '未知'}\n"
+                f"时间：{email_data.get('date', '')}\n"
+                f"摘要：{email_data.get('summary', '')}"
+                f"{action_text}"
+            )
+
+        system_prompt = (
+            "你是一个邮件日报助手。请根据给定邮件处理结果生成中文日报。"
+            "要求：先给总体概览，再按重要事项、待办事项、普通通知、可忽略信息分组；"
+            "最后给出明天需要优先跟进的事项。内容要具体、可执行，不要编造邮件中没有的信息。"
+        )
+        user_prompt = (
+            f"统计时间范围：{start_at} 到 {end_at}\n"
+            f"邮件数量：{len(emails)}\n\n"
+            "邮件列表：\n" + "\n\n".join(lines)
+        )
+        return self._call_api([
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ])
+
     def _parse_json(self, text: str):
         text = text.strip()
         if text.startswith("```"):

@@ -31,13 +31,9 @@ processing:
 
 # 调度设置
 schedule:
-  check_interval_minutes: 30
-  daily_report_time: "09:00"
+  check_interval_minutes: 3
+  daily_report_time: "17:00"
   weekly_report_day: monday
-
-# 数据库路径
-database:
-  path: data/emails.db
 
 # MySQL 连接信息从 .env 读取：
 # MYSQL_HOST / MYSQL_PORT / MYSQL_USER / MYSQL_PASSWORD / MYSQL_DATABASE / MYSQL_CHARSET
