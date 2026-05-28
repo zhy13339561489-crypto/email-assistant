@@ -39,6 +39,10 @@ schedule:
 database:
   path: data/emails.db
 
+# MySQL 连接信息从 .env 读取：
+# MYSQL_HOST / MYSQL_PORT / MYSQL_USER / MYSQL_PASSWORD / MYSQL_DATABASE / MYSQL_CHARSET
+mysql: {}
+
 # 日志设置
 logging:
   level: INFO

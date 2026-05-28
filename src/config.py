@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
-    load_dotenv()
+    load_dotenv(override=True)
 
     with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
@@ -27,8 +27,25 @@ def load_config(config_path: str = "config.yaml") -> dict:
     if os.getenv("OPENAI_MODEL"):
         config["openai"]["model"] = os.getenv("OPENAI_MODEL")
 
+    config["mysql"] = {
+        "host": _env("MYSQL_HOST", "MYSQL_IP", "DB_HOST", default="127.0.0.1"),
+        "port": int(_env("MYSQL_PORT", "DB_PORT", default="3306")),
+        "user": _env("MYSQL_USER", "MYSQL_USERNAME", "DB_USER", "DB_USERNAME", default=""),
+        "password": _env("MYSQL_PASSWORD", "DB_PASSWORD", default=""),
+        "database": _env("MYSQL_DATABASE", "MYSQL_DB", "DB_DATABASE", "DB_NAME", default="email_ai"),
+        "charset": _env("MYSQL_CHARSET", "DB_CHARSET", default="utf8mb4"),
+    }
+
     return config
 
 
 def get_project_root() -> Path:
     return Path(__file__).parent.parent
+
+
+def _env(*names: str, default: str = "") -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    return default

@@ -130,6 +130,7 @@ h3 {
 }
 
 .primary,
+.secondary,
 .ghost {
   height: 40px;
   border-radius: 8px;
@@ -144,6 +145,16 @@ h3 {
 
 .primary:hover {
   background: var(--accent-dark);
+}
+
+.secondary {
+  border: 1px solid rgba(47, 111, 159, 0.28);
+  background: #e8f2f8;
+  color: var(--blue);
+}
+
+.secondary:hover {
+  background: #d9ebf5;
 }
 
 .ghost {
@@ -537,6 +548,7 @@ tbody tr:hover {
 
   .field select,
   .search input,
+  .secondary,
   .primary {
     width: 100%;
   }

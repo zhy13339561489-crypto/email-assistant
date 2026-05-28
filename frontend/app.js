@@ -9,6 +9,7 @@ const state = {
 const els = {
   daysSelect: document.querySelector("#daysSelect"),
   searchInput: document.querySelector("#searchInput"),
+  processBtn: document.querySelector("#processBtn"),
   refreshBtn: document.querySelector("#refreshBtn"),
   totalCount: document.querySelector("#totalCount"),
   actionCount: document.querySelector("#actionCount"),
@@ -68,6 +69,28 @@ async function loadDashboard() {
     cell.appendChild(emptyState(`无法加载数据：${error.message}`));
     row.appendChild(cell);
     els.emailTable.appendChild(row);
+  }
+}
+
+async function processNow() {
+  setStatus("处理中");
+  els.processBtn.disabled = true;
+  try {
+    const response = await fetch("/api/process", { method: "POST" });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const result = await response.json();
+    if (result.error) {
+      throw new Error(result.error);
+    }
+    setStatus(result.running ? "已在运行" : `处理 ${result.processed || 0} 封`, "ok");
+    await loadDashboard();
+  } catch (error) {
+    setStatus("处理失败", "error");
+    console.error(error);
+  } finally {
+    els.processBtn.disabled = false;
   }
 }
 
@@ -296,6 +319,7 @@ els.searchInput.addEventListener("input", () => {
 });
 
 els.refreshBtn.addEventListener("click", loadDashboard);
+els.processBtn.addEventListener("click", processNow);
 els.closeDetailBtn.addEventListener("click", () => els.detailPanel.classList.remove("open"));
 
 window.addEventListener("keydown", (event) => {

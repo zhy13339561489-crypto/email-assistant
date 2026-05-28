@@ -6,13 +6,8 @@ from pathlib import Path
 from loguru import logger
 
 from src.config import load_config
-from src.fetcher import EmailFetcher
-from src.preprocessor import EmailPreprocessor
-from src.ai_engine import AIEngine
-from src.storage import EmailStorage
 from src.reporter import Reporter
-from src.scheduler import EmailScheduler
-from src.dashboard import run_dashboard
+from backend import EmailProcessingService, MySQLEmailStorage, run_backend
 
 
 def setup_logging(config: dict) -> None:
@@ -27,69 +22,12 @@ def setup_logging(config: dict) -> None:
 
 def process_emails(config: dict) -> int:
     """处理新邮件，返回处理数量"""
-    storage = EmailStorage(config["database"]["path"])
-    ai = AIEngine(
-        api_key=config["openai"]["api_key"],
-        model=config["openai"]["model"],
-        base_url=config["openai"].get("base_url"),
-        max_tokens=config["openai"]["max_tokens"],
-        temperature=config["openai"]["temperature"],
-        retry_count=config["processing"]["retry_count"],
-        retry_delay=config["processing"]["retry_delay"],
-        max_body_length=config["processing"]["max_body_length"],
-        categories=config["categories"],
-    )
-    preprocessor = EmailPreprocessor(config["processing"]["max_body_length"])
-
-    total_processed = 0
-
-    for account_cfg in config["email_accounts"]:
-        if not account_cfg.get("password"):
-            logger.warning(f"账户 {account_cfg['name']} 未配置密码，跳过")
-            continue
-
-        logger.info(f"处理账户: {account_cfg['address']}")
-        fetcher = EmailFetcher(
-            address=account_cfg["address"],
-            imap_server=account_cfg["imap_server"],
-            imap_port=account_cfg["imap_port"],
-            password=account_cfg["password"],
-            use_ssl=account_cfg.get("use_ssl", True),
-        )
-
-        try:
-            fetcher.connect()
-            emails = fetcher.fetch_unread()
-
-            if not emails:
-                continue
-
-            # 预处理
-            for e in emails:
-                preprocessor.process(e)
-
-            # AI 处理
-            results = ai.process_batch(emails)
-
-            # 存储
-            for email_data, result in results:
-                storage.save_result(email_data, result, account=account_cfg["name"])
-                logger.info(f"  [{result.classification.category}] {email_data.subject[:50]}")
-
-            total_processed += len(results)
-            logger.info(f"账户 {account_cfg['name']} 处理完成，共 {len(results)} 封")
-
-        except Exception as e:
-            logger.error(f"处理账户 {account_cfg['name']} 失败: {e}")
-        finally:
-            fetcher.disconnect()
-
-    return total_processed
+    return EmailProcessingService(config).process_emails()
 
 
 def generate_report(config: dict, report_type: str = "daily") -> str:
     """生成报告"""
-    storage = EmailStorage(config["database"]["path"])
+    storage = MySQLEmailStorage.from_config(config)
     reporter = Reporter(storage)
 
     if report_type == "weekly":
@@ -99,7 +37,7 @@ def generate_report(config: dict, report_type: str = "daily") -> str:
 
 def show_stats(config: dict, days: int = 30) -> str:
     """显示统计信息"""
-    storage = EmailStorage(config["database"]["path"])
+    storage = MySQLEmailStorage.from_config(config)
     stats = storage.get_stats(days=days)
 
     lines = [
@@ -123,18 +61,9 @@ def show_stats(config: dict, days: int = 30) -> str:
     return "\n".join(lines)
 
 
-def run_daemon(config: dict) -> None:
-    """后台定时运行"""
-    scheduler = EmailScheduler(
-        check_interval=config["schedule"]["check_interval_minutes"],
-        report_time=config["schedule"]["daily_report_time"],
-    )
-    scheduler.add_check_job(process_emails, args=[config])
-    scheduler.add_daily_report_job(
-        lambda: logger.info(f"\n{generate_report(config)}")
-    )
-    logger.info("进入后台模式，按 Ctrl+C 退出")
-    scheduler.start()
+def run_daemon(config: dict, interval_minutes: int | None = None) -> None:
+    """持续检查新邮件并自动处理"""
+    run_backend(config, interval_minutes=interval_minutes, auto_process=True)
 
 
 def main():
@@ -147,10 +76,25 @@ def main():
     report_weekly = sub.add_parser("report-weekly", help="生成周报")
     stats_parser = sub.add_parser("stats", help="查看统计")
     stats_parser.add_argument("--days", type=int, default=30, help="统计天数")
-    sub.add_parser("daemon", help="后台定时运行")
-    dashboard_parser = sub.add_parser("dashboard", help="启动邮件处理结果页面")
+    daemon_parser = sub.add_parser("daemon", help="常驻后端：提供 API，并自动检查处理新邮件")
+    daemon_parser.add_argument("--interval", type=int, help="检查间隔分钟数，默认读取 config.yaml")
+    daemon_parser.add_argument("--host", default="127.0.0.1", help="后端监听地址")
+    daemon_parser.add_argument("--port", type=int, default=8765, help="后端监听端口")
+    daemon_parser.add_argument("--no-auto", action="store_true", help="只启动 API，不自动轮询邮箱")
+    backend_parser = sub.add_parser("backend", help="启动后端服务")
+    backend_parser.add_argument("--interval", type=int, help="检查间隔分钟数，默认读取 config.yaml")
+    backend_parser.add_argument("--host", default="127.0.0.1", help="后端监听地址")
+    backend_parser.add_argument("--port", type=int, default=8765, help="后端监听端口")
+    backend_parser.add_argument("--no-auto", action="store_true", help="只启动 API，不自动轮询邮箱")
+    watch_parser = sub.add_parser("watch", help="backend 的别名：常驻监听新邮件")
+    watch_parser.add_argument("--interval", type=int, help="检查间隔分钟数，默认读取 config.yaml")
+    watch_parser.add_argument("--host", default="127.0.0.1", help="后端监听地址")
+    watch_parser.add_argument("--port", type=int, default=8765, help="后端监听端口")
+    watch_parser.add_argument("--no-auto", action="store_true", help="只启动 API，不自动轮询邮箱")
+    dashboard_parser = sub.add_parser("dashboard", help="启动后端服务并展示前端页面")
     dashboard_parser.add_argument("--host", default="127.0.0.1", help="监听地址")
     dashboard_parser.add_argument("--port", type=int, default=8765, help="监听端口")
+    dashboard_parser.add_argument("--no-auto", action="store_true", help="只启动 API，不自动轮询邮箱")
 
     args = parser.parse_args()
     config = load_config(args.config)
@@ -166,12 +110,35 @@ def main():
     elif args.command == "stats":
         print(show_stats(config, args.days))
     elif args.command == "daemon":
-        run_daemon(config)
-    elif args.command == "dashboard":
-        run_dashboard(
-            db_path=config["database"]["path"],
+        run_backend(
+            config,
             host=args.host,
             port=args.port,
+            interval_minutes=args.interval,
+            auto_process=not args.no_auto,
+        )
+    elif args.command == "backend":
+        run_backend(
+            config,
+            host=args.host,
+            port=args.port,
+            interval_minutes=args.interval,
+            auto_process=not args.no_auto,
+        )
+    elif args.command == "watch":
+        run_backend(
+            config,
+            host=args.host,
+            port=args.port,
+            interval_minutes=args.interval,
+            auto_process=not args.no_auto,
+        )
+    elif args.command == "dashboard":
+        run_backend(
+            config,
+            host=args.host,
+            port=args.port,
+            auto_process=not args.no_auto,
         )
 
 

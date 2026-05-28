@@ -1,5 +1,5 @@
 .env
-data/*.db
+data/
 __pycache__/
 *.pyc
 .venv/
@@ -7,6 +7,5 @@ venv/
 .test-data/
 .claude/
 .idea/
-.test-data/
 python解释器路径.txt
 
